@@ -80,14 +80,12 @@ def main() -> None:
     replace_required(
         root / "app/src/main/java/pro/babasitaram/vault/presentation/components/AppDrawer.kt",
         [
-            ("import androidx.compose.material3.HorizontalDivider\n",
-             "import androidx.compose.material.icons.Icons\n"
-             "import androidx.compose.material.icons.filled.Lock\n"
-             "import androidx.compose.material3.HorizontalDivider\n"),
             ("imageVector = androidx.compose.material.icons.Icons.Default.Lock",
-             "imageVector = Icons.Default.Lock"),
+             "imageVector = androidx.compose.material.icons.Icons.Default.Lock"),
+            ("imageVector = Icons.Default.Lock",
+             "imageVector = androidx.compose.material.icons.Icons.Default.Lock"),
         ],
-        ["import androidx.compose.material.icons.filled.Lock", "imageVector = Icons.Default.Lock"],
+        ["imageVector = androidx.compose.material.icons.Icons.Default.Lock"],
     )
 
     replace_required(
