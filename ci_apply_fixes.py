@@ -94,16 +94,16 @@ def main() -> None:
 
     drawer = root / "app/src/main/java/pro/babasitaram/vault/presentation/components/AppDrawer.kt"
     drawer_text = drawer.read_text(encoding="utf-8")
-    if "import androidx.compose.material.icons.filled.Lock" not in drawer_text:
+    if "import androidx.compose.material.icons.Icons" not in drawer_text:
         marker = "import androidx.compose.material3."
         idx = drawer_text.find(marker)
         if idx >= 0:
             line_start = drawer_text.rfind("\n", 0, idx) + 1
-            drawer_text = drawer_text[:line_start] + "import androidx.compose.material.icons.filled.Lock\n" + drawer_text[line_start:]
+            drawer_text = drawer_text[:line_start] + "import androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.filled.Lock\n" + drawer_text[line_start:]
         else:
             drawer_text = drawer_text.replace(
                 "package pro.babasitaram.vault.presentation.components\n",
-                "package pro.babasitaram.vault.presentation.components\n\nimport androidx.compose.material.icons.filled.Lock\n",
+                "package pro.babasitaram.vault.presentation.components\n\nimport androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.filled.Lock\n",
                 1,
             )
     if "imageVector = androidx.compose.material.icons.Icons.Default.Lock" in drawer_text:
@@ -113,6 +113,8 @@ def main() -> None:
         )
     if "imageVector = Icons.Default.Lock" not in drawer_text:
         raise SystemExit(f"PATCH FAILED {drawer}: lock icon reference missing")
+    if "import androidx.compose.material.icons.Icons" not in drawer_text:
+        raise SystemExit(f"PATCH FAILED {drawer}: Icons import missing")
     if "import androidx.compose.material.icons.filled.Lock" not in drawer_text:
         raise SystemExit(f"PATCH FAILED {drawer}: Lock import missing")
     drawer.write_text(drawer_text, encoding="utf-8")
@@ -131,6 +133,14 @@ def main() -> None:
 
     editor = root / "app/src/main/java/pro/babasitaram/vault/presentation/editor/EntryEditorScreen.kt"
     editor_import_text = editor.read_text(encoding="utf-8") if editor.is_file() else ""
+    if "import androidx.compose.foundation.shape.RoundedCornerShape\n" not in editor_import_text:
+        editor_import_text = editor_import_text.replace(
+            "import androidx.compose.foundation.layout.Arrangement\n",
+            "import androidx.compose.foundation.layout.Arrangement\nimport androidx.compose.foundation.shape.RoundedCornerShape\n",
+            1,
+        )
+        editor.write_text(editor_import_text, encoding="utf-8")
+        print("PATCHED EntryEditor RoundedCornerShape import")
     if "import pro.babasitaram.vault.presentation.components.AppElevation\n" not in editor_import_text:
         editor_import_text = editor_import_text.replace(
             "import pro.babasitaram.vault.presentation.components.AppDimens\n",
