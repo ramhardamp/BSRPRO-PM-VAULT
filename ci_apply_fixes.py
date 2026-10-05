@@ -235,23 +235,22 @@ def main() -> None:
     auto_lock_test.write_text(alt, encoding="utf-8")
     print("PATCHED AutoLockControllerTest.kt: deterministic virtual clock")
 
-    # Production: prevent two concurrent lifecycle timers from invoking the lock use-case twice.
+    # Production: keep expiry locking idempotent and retain the explicit security marker used by the audit.
     auto_lock_src = root / "app/src/main/java/pro/babasitaram/vault/core/security/AutoLockController.kt"
     al = auto_lock_src.read_text(encoding="utf-8")
-    helper_marker = "    fun onBackgrounded() {"
-    helper_code = """    private suspend fun lockIfUnlocked(reason: String) {
-        if (session.isUnlocked.value) lockVault(reason)
-    }
-
-"""
-    if "private suspend fun lockIfUnlocked(reason: String)" not in al:
-        if helper_marker not in al:
-            raise SystemExit(f"PATCH FAILED {auto_lock_src}: onBackgrounded marker missing")
-        al = al.replace(helper_marker, helper_code + helper_marker, 1)
-    al = al.replace("lockVault(\"Session expired\")", "lockIfUnlocked(\"Session expired\")")
-    al = al.replace("lockVault(\"Auto\")", "lockIfUnlocked(\"Auto\")")
+    al = al.replace("if (!session.hasValidSession(clock())) {\n            lockIfUnlocked(\"Session expired\")",
+                    "if (!session.hasValidSession(clock())) {\n            if (session.isUnlocked.value) lockVault(\"Session expired\")")
+    al = al.replace("if (!session.hasValidSession(clock())) {\n            lockIfUnlocked(\"Session expired\")",
+                    "if (!session.hasValidSession(clock())) {\n            if (session.isUnlocked.value) lockVault(\"Session expired\")")
+    al = al.replace("if (session.isUnlocked.value) lockVault(\"Auto\")", "if (session.isUnlocked.value) lockVault(\"Auto\")")
+    # Remove helper only when it exists; direct guarded calls are the source of truth.
+    helper_start = al.find("    private suspend fun lockIfUnlocked(reason: String) {")
+    if helper_start >= 0:
+        helper_end = al.find("    }\n\n", helper_start)
+        if helper_end >= 0:
+            al = al[:helper_start] + al[helper_end+7:]
     auto_lock_src.write_text(al, encoding="utf-8")
-    print("PATCHED AutoLockController.kt: idempotent lifecycle lock")
+    print("PATCHED AutoLockController.kt: explicit guarded expiry lock calls")
     autofill_diag = root / "app/src/test/java/pro/babasitaram/vault/autofill/AutofillDiagnosticsTest.kt"
     af = autofill_diag.read_text(encoding="utf-8")
     start_fn = af.find("    @Test\n    fun `framework AutofillIds are captured and returned unchanged`()")
