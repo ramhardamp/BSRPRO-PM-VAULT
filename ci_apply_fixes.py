@@ -131,73 +131,79 @@ def main() -> None:
         ["import androidx.compose.ui.semantics.heading", "heading()"],
     )
 
-    # Test-source compiler fixes exposed after production sources compile.
+    # Test-source fixes: compare against the known-working Phase15V tests and keep new assertions,
+    # but restore proper scope/imports/signatures rather than masking compiler failures.
     autofill_test = root / "app/src/test/java/pro/babasitaram/vault/autofill/AutofillParserTest.kt"
-    replace_required(
-        autofill_test,
-        [
-            (
-                "class AutofillParserNativeWordsTest {\n",
-                "class AutofillParserNativeWordsTest {\n"
-                "    private val numberPassword = 0x12\n"
-                "    private fun c(h: FieldHints) = AutofillParser.classify(h)\n",
-            )
-        ],
-        ["private val numberPassword = 0x12", "private fun c(h: FieldHints)"],
-    )
+    autofill_text = autofill_test.read_text(encoding="utf-8")
+    extra_start = autofill_text.find("    @Test fun `PIN field with no declared limit is still a PIN()`")
+    if extra_start < 0:
+        extra_start = autofill_text.find("    @Test fun `PIN field with no declared limit is still a PIN`")
+    if extra_start >= 0:
+        extra_end = autofill_text.find("\n}\n", extra_start)
+        if extra_end < 0:
+            raise SystemExit(f"PATCH FAILED {autofill_test}: extra test block end not found")
+        extra_block = autofill_text[extra_start:extra_end]
+        autofill_text = autofill_text[:extra_start] + autofill_text[extra_end:]
+        first_class_end = autofill_text.find("\n}\n\n/** Extra field-name words")
+        if first_class_end < 0:
+            raise SystemExit(f"PATCH FAILED {autofill_test}: first class boundary not found")
+        autofill_text = autofill_text[:first_class_end] + "\n" + extra_block + autofill_text[first_class_end:]
+        autofill_test.write_text(autofill_text, encoding="utf-8")
+        print("PATCHED AutofillParserTest.kt: moved new PIN tests into first test class")
+    else:
+        print("UNCHANGED AutofillParserTest.kt: no extra PIN block found")
 
     interop_test = root / "app/src/test/java/pro/babasitaram/vault/core/crypto/ExtensionAndroidV3InteropTest.kt"
-    replace_required(
-        interop_test,
-        [
-            (
-                "import kotlinx.serialization.json.jsonObject\n",
-                "import pro.babasitaram.vault.core.model.VaultJson\n"
-                "import kotlinx.serialization.json.jsonObject\n",
-            )
-        ],
-        ["import pro.babasitaram.vault.core.model.VaultJson"],
-    )
+    interop_text = interop_test.read_text(encoding="utf-8")
+    if "import pro.babasitaram.vault.core.model.VaultJson" not in interop_text:
+        interop_text = interop_text.replace(
+            "import org.junit.jupiter.api.Test\n",
+            "import org.junit.jupiter.api.Test\n"
+            "import pro.babasitaram.vault.core.model.VaultJson\n",
+            1,
+        )
+        interop_test.write_text(interop_text, encoding="utf-8")
+        print("PATCHED ExtensionAndroidV3InteropTest.kt: VaultJson import")
 
     failure_test = root / "app/src/test/java/pro/babasitaram/vault/data/FileVaultBlobStoreFailureInjectionTest.kt"
     replace_required(
         failure_test,
         [
             (
-                'VaultWriteHooks.Step.ATOMIC_MOVE -> throw java.nio.file.AtomicMoveNotSupportedException("injected")',
-                'VaultWriteHooks.Step.ATOMIC_MOVE -> throw java.nio.file.AtomicMoveNotSupportedException("vault.blob.tmp", "vault.blob", "injected")',
+                'AtomicMoveNotSupportedException("injected")',
+                'AtomicMoveNotSupportedException("vault.blob.tmp", "vault.blob", "injected")',
             )
         ],
         ['AtomicMoveNotSupportedException("vault.blob.tmp", "vault.blob", "injected")'],
     )
+
+    autobackup_test = root / "app/src/test/java/pro/babasitaram/vault/data/backup/AutoBackupNamesTest.kt"
+    autobackup_text = autobackup_test.read_text(encoding="utf-8")
+    autobackup_text = autobackup_text.replace("import kotlin.test.Test\n", "import org.junit.jupiter.api.Test\n")
+    autobackup_text = autobackup_text.replace("import kotlin.test.assertEquals\n", "import org.junit.jupiter.api.Assertions.assertEquals\n")
+    autobackup_text = autobackup_text.replace("import kotlin.test.assertFalse\n", "import org.junit.jupiter.api.Assertions.assertFalse\n")
+    autobackup_text = autobackup_text.replace("import kotlin.test.assertTrue\n", "import org.junit.jupiter.api.Assertions.assertTrue\n")
+    autobackup_test.write_text(autobackup_text, encoding="utf-8")
+    print("PATCHED AutoBackupNamesTest.kt: JUnit5 imports")
 
     settings_test = root / "app/src/test/java/pro/babasitaram/vault/domain/SettingsAndBackupUseCasesTest.kt"
     replace_required(
         settings_test,
         [
             (
-                "fun err(o: String, n: String, c: String) =",
-                "suspend fun err(o: String, n: String, c: String) =",
+                "        fun err(o: String, n: String, c: String) = ((e.change(o.toCharArray(), n.toCharArray(), c.toCharArray())) as VaultResult.Failure).error",
+                "        suspend fun err(o: String, n: String, c: String) = ((e.change(o.toCharArray(), n.toCharArray(), c.toCharArray())) as VaultResult.Failure).error",
             )
         ],
-        ["suspend fun err(o: String, n: String, c: String)"],
+        ["        suspend fun err(o: String, n: String, c: String)"],
     )
 
     gradle_file = root / "app/build.gradle.kts"
     gradle_text = gradle_file.read_text(encoding="utf-8")
-    if "testImplementation(kotlin(\"test\"))" not in gradle_text:
-        anchor = "    testImplementation(libs.junit5.api)\n"
-        if anchor not in gradle_text:
-            raise SystemExit(f"PATCH FAILED {gradle_file}: test dependency anchor missing")
-        gradle_text = gradle_text.replace(
-            anchor,
-            anchor + "    testImplementation(kotlin(\"test\"))\n",
-            1,
-        )
+    if '    testImplementation(kotlin("test"))\n' in gradle_text:
+        gradle_text = gradle_text.replace('    testImplementation(kotlin("test"))\n', "")
         gradle_file.write_text(gradle_text, encoding="utf-8")
-        print("PATCHED app/build.gradle.kts: kotlin test dependency")
-    else:
-        print("UNCHANGED app/build.gradle.kts: kotlin test dependency already present")
+        print("PATCHED app/build.gradle.kts: removed unnecessary kotlin-test dependency")
 
     editor = root / "app/src/main/java/pro/babasitaram/vault/presentation/editor/EntryEditorScreen.kt"
     editor_import_text = editor.read_text(encoding="utf-8") if editor.is_file() else ""
