@@ -1,0 +1,77 @@
+name: Build APK from ZIP
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Extract ZIP
+        run: |
+          mkdir -p extracted
+          unzip -o BsrProVault-Phase16G-ANDROID-SOURCE-NOWRAPPER.zip -d extracted
+          echo "=== Files at root of extract ==="
+          ls -la extracted/
+      
+      - name: Find project root
+        id: findroot
+        run: |
+          # Find where gradlew or settings.gradle.kts is
+          if [ -f "extracted/settings.gradle.kts" ]; then
+            echo "root=extracted" >> $GITHUB_OUTPUT
+          elif [ -f "extracted/bsrpro-vault-phase1-2/settings.gradle.kts" ]; then
+            echo "root=extracted/bsrpro-vault-phase1-2" >> $GITHUB_OUTPUT
+          else
+            ROOT=$(find extracted -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
+            echo "root=$ROOT" >> $GITHUB_OUTPUT
+          fi
+          echo "Project root: $(cat $GITHUB_OUTPUT | grep root | cut -d= -f2)"
+      
+      - name: Show project root contents
+        run: |
+          ROOT="${{ steps.findroot.outputs.root }}"
+          ls -la "$ROOT/"
+      
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Create local.properties
+        run: |
+          ROOT="${{ steps.findroot.outputs.root }}"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$ROOT/local.properties"
+          cat "$ROOT/local.properties"
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      
+      - name: Build APK
+        run: |
+          ROOT="${{ steps.findroot.outputs.root }}"
+          cd "$ROOT"
+          gradle assembleDebug --stacktrace --no-daemon
+      
+      - name: Find APK
+        id: findapk
+        if: always()
+        run: |
+          echo "=== Searching for APK ==="
+          find extracted -name "*.apk" -type f
+      
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsrpro-debug-apk
+          path: extracted/**/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
