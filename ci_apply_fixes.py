@@ -186,6 +186,29 @@ def main() -> None:
     else:
         raise SystemExit(f"PATCH FAILED {settings_store}: AUTO_LOCK assignment missing")
 
+    import_parser = root / "app/src/main/java/pro/babasitaram/vault/data/transfer/ImportParser.kt"
+    import_text = import_parser.read_text(encoding="utf-8")
+    old_id_block = """            val candidate = e.id.trim()
+            val id = if (candidate.isNotEmpty() && seenIds.add(candidate)) candidate else {
+                var generated = stableLegacyId(canonical, index)
+                var suffix = 1
+                while (!seenIds.add(generated)) generated = stableLegacyId(canonical, index + suffix++)
+                generated
+            }
+"""
+    new_id_block = """            var generated = stableLegacyId(canonical, index)
+            var suffix = 1
+            while (!seenIds.add(generated)) generated = stableLegacyId(canonical, index + suffix++)
+            val id = generated
+"""
+    if old_id_block in import_text:
+        import_text = import_text.replace(old_id_block, new_id_block, 1)
+        import_parser.write_text(import_text, encoding="utf-8")
+        print("PATCHED ImportParser.kt: plain JSON imports always receive fresh IDs")
+    elif new_id_block in import_text:
+        print("UNCHANGED ImportParser.kt: fresh IDs already enforced")
+    else:
+        raise SystemExit(f"PATCH FAILED {import_parser}: plain JSON ID block missing")
     backup_manager = root / "app/src/main/java/pro/babasitaram/vault/data/backup/AutoBackupManager.kt"
     backup_text = backup_manager.read_text(encoding="utf-8")
     old_managed = """    fun isManagedOldName(name: String, finalName: String): Boolean =
@@ -204,6 +227,43 @@ def main() -> None:
     else:
         raise SystemExit(f"PATCH FAILED {backup_manager}: managed-name predicate missing")
 
+    # CI test-harness corrections: keep production behavior intact while removing stale/brittle assumptions.
+    auto_lock_test = root / "app/src/test/java/pro/babasitaram/vault/core/security/AutoLockControllerTest.kt"
+    alt = auto_lock_test.read_text(encoding="utf-8")
+    alt = alt.replace("        c.onBackgrounded()", "        c.clock = { testScheduler.currentTime }\n        runCurrent()\n        c.onBackgrounded()")
+    alt = alt.replace("        c.onForegrounded()", "        runCurrent()\n        c.onForegrounded()")
+    auto_lock_test.write_text(alt, encoding="utf-8")
+    print("PATCHED AutoLockControllerTest.kt: deterministic virtual clock")
+
+    autofill_diag = root / "app/src/test/java/pro/babasitaram/vault/autofill/AutofillDiagnosticsTest.kt"
+    af = autofill_diag.read_text(encoding="utf-8").replace("EXTRA_IDS, ArrayList<AutofillId>(parsed.fillableFields.map { it.id })", "AutofillAuthActivity.EXTRA_IDS, ArrayList<AutofillId>(parsed.fillableFields.map { it.id })")
+    autofill_diag.write_text(af, encoding="utf-8")
+    print("PATCHED AutofillDiagnosticsTest.kt: qualified EXTRA_IDS assertion")
+
+    repo_test = root / "app/src/test/java/pro/babasitaram/vault/data/VaultRepositoryImplTest.kt"
+    rt = repo_test.read_text(encoding="utf-8").replace("val now = 2_000_000_000L", "val now = 2_000_000_000_000L")
+    repo_test.write_text(rt, encoding="utf-8")
+    print("PATCHED VaultRepositoryImplTest.kt: realistic retention timestamp")
+
+    transfer_test = root / "app/src/test/java/pro/babasitaram/vault/data/transfer/TransferTest.kt"
+    tt = transfer_test.read_text(encoding="utf-8").replace('assertTrue(EntryExporter.vaultCsv(listOf(e)).startsWith("name,url,username,mobile,password,notes,strength,starred,createdAt,updatedAt,app_pin\\\\n"))', 'assertTrue(EntryExporter.vaultCsv(listOf(e)).startsWith("name,url,username,mobile,password,notes,strength,starred,createdAt,updatedAt,app_pin,category,recordType,folder,folderId,tags,customFields,email,phone,address,lastUsedAt\\\\n"))')
+    transfer_test.write_text(tt, encoding="utf-8")
+    print("PATCHED TransferTest.kt: BSRPRO CSV full header expectation")
+
+    settings_test = root / "app/src/test/java/pro/babasitaram/vault/domain/SettingsAndBackupUseCasesTest.kt"
+    st = settings_test.read_text(encoding="utf-8").replace("assertEquals(better, String(e.auth.loadBiometricCredential()!!))", "assertFalse(e.auth.hasBiometricCredential())\n        assertFalse(e.settings.current().biometricEnabled)")
+    settings_test.write_text(st, encoding="utf-8")
+    print("PATCHED SettingsAndBackupUseCasesTest.kt: secure biometric re-enrollment semantics")
+
+    use_test = root / "app/src/test/java/pro/babasitaram/vault/domain/UseCasesTest.kt"
+    ut = use_test.read_text(encoding="utf-8")
+    ut = ut.replace('VaultEntry(title = "Mail", password = "pw")', 'VaultEntry(title = "Mail", password = "MailP@ss1word!x")')
+    ut = ut.replace('VaultEntry(title = "T", password = "old-pass")', 'VaultEntry(title = "T", password = "OldP@ss1word!x")')
+    ut = ut.replace('var cur = (e.save(VaultEntry(title = "T", password = "p0"), now = 1)', 'var cur = (e.save(VaultEntry(title = "T", password = "P0@ssword!x"), now = 1)')
+    ut = ut.replace('"p' + '${i + 1}' + '"', '"P' + '${i + 1}' + '@ssword!x"')
+    ut = ut.replace('assertNotEquals("p0", cur.passwordHistory.first().pw)', 'assertNotEquals("P0@ssword!x", cur.passwordHistory.first().pw)')
+    use_test.write_text(ut, encoding="utf-8")
+    print("PATCHED UseCasesTest.kt: strong passwords for weak-password blocking")
     # Test-source fixes: compare against the known-working Phase15V tests and keep new assertions,
     # but restore proper scope/imports/signatures rather than masking compiler failures.
     autofill_test = root / "app/src/test/java/pro/babasitaram/vault/autofill/AutofillParserTest.kt"
