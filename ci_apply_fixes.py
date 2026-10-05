@@ -131,6 +131,74 @@ def main() -> None:
         ["import androidx.compose.ui.semantics.heading", "heading()"],
     )
 
+    # Test-source compiler fixes exposed after production sources compile.
+    autofill_test = root / "app/src/test/java/pro/babasitaram/vault/autofill/AutofillParserTest.kt"
+    replace_required(
+        autofill_test,
+        [
+            (
+                "class AutofillParserNativeWordsTest {\n",
+                "class AutofillParserNativeWordsTest {\n"
+                "    private val numberPassword = 0x12\n"
+                "    private fun c(h: FieldHints) = AutofillParser.classify(h)\n",
+            )
+        ],
+        ["private val numberPassword = 0x12", "private fun c(h: FieldHints)"],
+    )
+
+    interop_test = root / "app/src/test/java/pro/babasitaram/vault/core/crypto/ExtensionAndroidV3InteropTest.kt"
+    replace_required(
+        interop_test,
+        [
+            (
+                "import kotlinx.serialization.json.jsonObject\n",
+                "import pro.babasitaram.vault.core.model.VaultJson\n"
+                "import kotlinx.serialization.json.jsonObject\n",
+            )
+        ],
+        ["import pro.babasitaram.vault.core.model.VaultJson"],
+    )
+
+    failure_test = root / "app/src/test/java/pro/babasitaram/vault/data/FileVaultBlobStoreFailureInjectionTest.kt"
+    replace_required(
+        failure_test,
+        [
+            (
+                'VaultWriteHooks.Step.ATOMIC_MOVE -> throw java.nio.file.AtomicMoveNotSupportedException("injected")',
+                'VaultWriteHooks.Step.ATOMIC_MOVE -> throw java.nio.file.AtomicMoveNotSupportedException("vault.blob.tmp", "vault.blob", "injected")',
+            )
+        ],
+        ['AtomicMoveNotSupportedException("vault.blob.tmp", "vault.blob", "injected")'],
+    )
+
+    settings_test = root / "app/src/test/java/pro/babasitaram/vault/domain/SettingsAndBackupUseCasesTest.kt"
+    replace_required(
+        settings_test,
+        [
+            (
+                "fun err(o: String, n: String, c: String) =",
+                "suspend fun err(o: String, n: String, c: String) =",
+            )
+        ],
+        ["suspend fun err(o: String, n: String, c: String)"],
+    )
+
+    gradle_file = root / "app/build.gradle.kts"
+    gradle_text = gradle_file.read_text(encoding="utf-8")
+    if "testImplementation(kotlin(\"test\"))" not in gradle_text:
+        anchor = "    testImplementation(libs.junit5.api)\n"
+        if anchor not in gradle_text:
+            raise SystemExit(f"PATCH FAILED {gradle_file}: test dependency anchor missing")
+        gradle_text = gradle_text.replace(
+            anchor,
+            anchor + "    testImplementation(kotlin(\"test\"))\n",
+            1,
+        )
+        gradle_file.write_text(gradle_text, encoding="utf-8")
+        print("PATCHED app/build.gradle.kts: kotlin test dependency")
+    else:
+        print("UNCHANGED app/build.gradle.kts: kotlin test dependency already present")
+
     editor = root / "app/src/main/java/pro/babasitaram/vault/presentation/editor/EntryEditorScreen.kt"
     editor_import_text = editor.read_text(encoding="utf-8") if editor.is_file() else ""
     if "import androidx.compose.foundation.shape.RoundedCornerShape\n" not in editor_import_text:
