@@ -130,6 +130,17 @@ def main() -> None:
     )
 
     editor = root / "app/src/main/java/pro/babasitaram/vault/presentation/editor/EntryEditorScreen.kt"
+    editor_import_text = editor.read_text(encoding="utf-8") if editor.is_file() else ""
+    if "import pro.babasitaram.vault.presentation.components.AppElevation\n" not in editor_import_text:
+        editor_import_text = editor_import_text.replace(
+            "import pro.babasitaram.vault.presentation.components.AppDimens\n",
+            "import pro.babasitaram.vault.presentation.components.AppDimens\n"
+            "import pro.babasitaram.vault.presentation.components.AppElevation\n"
+            "import pro.babasitaram.vault.presentation.components.AppShapes\n",
+            1,
+        )
+        editor.write_text(editor_import_text, encoding="utf-8")
+        print("PATCHED EntryEditor imports")
     replace_region(
         editor,
         "    Column(verticalArrangement = Arrangement.spacedBy(AppDimens.Xxs)) {",
@@ -139,8 +150,8 @@ def main() -> None:
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { dialogOpen = true },
-            shape = RoundedCornerShape(12.dp),
-            tonalElevation = 1.dp
+            shape = RoundedCornerShape(AppShapes.Small),
+            tonalElevation = AppElevation.Card
         ) {
             Row(
                 modifier = Modifier
@@ -161,7 +172,7 @@ def main() -> None:
                         Image(
                             selectedIcon.asImageBitmap(),
                             contentDescription = selectedName.ifBlank { selectedPackage },
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(AppDimens.SmallFieldIcon)
                         )
                     } else {
                         Icon(
