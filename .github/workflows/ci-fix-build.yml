@@ -1,0 +1,102 @@
+name: BSRPRO Android CI - compiler fix verification
+
+on:
+  push:
+    branches:
+      - fix/ci-compiler-20261005
+    paths:
+      - BsrProVault.zip
+      - ci_apply_fixes.py
+      - .github/workflows/ci-fix-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract source ZIP
+        run: |
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -q BsrProVault.zip -d extracted
+          test -f extracted/settings.gradle.kts
+          test -f extracted/app/src/main/res/raw/bsr_loading.json
+
+      - name: Apply deterministic compiler fixes
+        run: |
+          python3 ci_apply_fixes.py extracted
+
+      - name: Source regression audits
+        working-directory: extracted
+        run: |
+          set -e
+          python3 tools/all_fixes_regression.py
+          python3 tools/strict_compiler_hazard_audit.py
+          python3 tools/phase_smart_session_audit.py
+          python3 tools/phase15m_regression.py
+          python3 tools/batch6_contract_audit.py
+          python3 tools/batch7_audit.py
+          python3 tools/bracket_check.py
+          python3 tools/font_scaling_audit.py
+          python3 tools/static_audit.py
+          python3 tools/symbol_check.py
+
+      - name: Protect crypto parser invariant
+        working-directory: extracted
+        run: |
+          test "$(sha256sum app/src/main/java/pro/babasitaram/vault/core/crypto/V3PayloadParser.kt | cut -d' ' -f1)" = "177529c15e0e11f5ad3ba7fbd8a0d5a8e5e20c364e3f5a189e5268084eb9d92d"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Create local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > extracted/local.properties
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Compile, unit-test and assemble Debug + Release
+        working-directory: extracted
+        run: |
+          gradle compileDebugKotlin compileReleaseKotlin testDebugUnitTest assembleDebug assembleRelease --stacktrace --no-daemon
+
+      - name: Verify APKs
+        run: |
+          set -e
+          DEBUG_APK="$(find extracted/app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -type f | head -1)"
+          RELEASE_APK="$(find extracted/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -type f | head -1)"
+          test -n "$DEBUG_APK"
+          test -n "$RELEASE_APK"
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          AAPT="$(find "$ANDROID_SDK_ROOT/build-tools" -name aapt -type f | sort -V | tail -1)"
+          "$APKSIGNER" verify --verbose "$DEBUG_APK"
+          "$APPSIGNER" verify --verbose "$RELEASE_APK" 2>/dev/null || "$APKSIGNER" verify --verbose "$RELEASE_APK"
+          "$AAPT" dump badging "$DEBUG_APK" | head -20
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsrpro-apks-compiler-verified
+          path: |
+            extracted/app/build/outputs/apk/debug/*.apk
+            extracted/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+      - name: Upload patched source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsrpro-patched-source-compiler-verified
+          path: extracted
+          retention-days: 30
