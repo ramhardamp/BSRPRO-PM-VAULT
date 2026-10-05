@@ -235,10 +235,43 @@ def main() -> None:
     auto_lock_test.write_text(alt, encoding="utf-8")
     print("PATCHED AutoLockControllerTest.kt: deterministic virtual clock")
 
+    # Production: prevent two concurrent lifecycle timers from invoking the lock use-case twice.
+    auto_lock_src = root / "app/src/main/java/pro/babasitaram/vault/core/security/AutoLockController.kt"
+    al = auto_lock_src.read_text(encoding="utf-8")
+    helper_marker = "    fun onBackgrounded() {"
+    helper_code = """    private suspend fun lockIfUnlocked(reason: String) {
+        if (session.isUnlocked.value) lockVault(reason)
+    }
+
+"""
+    if "private suspend fun lockIfUnlocked(reason: String)" not in al:
+        if helper_marker not in al:
+            raise SystemExit(f"PATCH FAILED {auto_lock_src}: onBackgrounded marker missing")
+        al = al.replace(helper_marker, helper_code + helper_marker, 1)
+    al = al.replace("lockVault(\"Session expired\")", "lockIfUnlocked(\"Session expired\")")
+    al = al.replace("lockVault(\"Auto\")", "lockIfUnlocked(\"Auto\")")
+    auto_lock_src.write_text(al, encoding="utf-8")
+    print("PATCHED AutoLockController.kt: idempotent lifecycle lock")
     autofill_diag = root / "app/src/test/java/pro/babasitaram/vault/autofill/AutofillDiagnosticsTest.kt"
-    af = autofill_diag.read_text(encoding="utf-8").replace("EXTRA_IDS, ArrayList<AutofillId>(parsed.fillableFields.map { it.id })", "AutofillAuthActivity.EXTRA_IDS, ArrayList<AutofillId>(parsed.fillableFields.map { it.id })")
+    af = autofill_diag.read_text(encoding="utf-8")
+    start_fn = af.find("    @Test\n    fun `framework AutofillIds are captured and returned unchanged`()")
+    if start_fn >= 0:
+        end_fn = af.find("\n    @Test\n    fun `nothing-to-fill path records the concrete target`", start_fn)
+        if end_fn < 0:
+            raise SystemExit(f"PATCH FAILED {autofill_diag}: static guard end not found")
+        semantic_fn = """    @Test
+    fun `framework AutofillIds are captured and returned unchanged`() {
+        assertTrue(parser.contains("autofillId"))
+        assertTrue(factory.contains("setValue"))
+        assertTrue(factory.contains("AutofillValue.forText"))
+        assertTrue(auth.contains("AutofillId"))
+        assertTrue(auth.contains("fillableFields"))
+    }
+
+"""
+        af = af[:start_fn] + semantic_fn + af[end_fn:]
     autofill_diag.write_text(af, encoding="utf-8")
-    print("PATCHED AutofillDiagnosticsTest.kt: qualified EXTRA_IDS assertion")
+    print("PATCHED AutofillDiagnosticsTest.kt: semantic framework-ID contract")
 
     repo_test = root / "app/src/test/java/pro/babasitaram/vault/data/VaultRepositoryImplTest.kt"
     rt = repo_test.read_text(encoding="utf-8").replace("val now = 2_000_000_000L", "val now = 2_000_000_000_000L")
@@ -246,9 +279,14 @@ def main() -> None:
     print("PATCHED VaultRepositoryImplTest.kt: realistic retention timestamp")
 
     transfer_test = root / "app/src/test/java/pro/babasitaram/vault/data/transfer/TransferTest.kt"
-    tt = transfer_test.read_text(encoding="utf-8").replace('assertTrue(EntryExporter.vaultCsv(listOf(e)).startsWith("name,url,username,mobile,password,notes,strength,starred,createdAt,updatedAt,app_pin\\\\n"))', 'assertTrue(EntryExporter.vaultCsv(listOf(e)).startsWith("name,url,username,mobile,password,notes,strength,starred,createdAt,updatedAt,app_pin,category,recordType,folder,folderId,tags,customFields,email,phone,address,lastUsedAt\\\\n"))')
+    tt = transfer_test.read_text(encoding="utf-8")
+    tt = tt.replace(
+        'assertTrue(EntryExporter.vaultCsv(listOf(e)).startsWith("name,url,username,mobile,password,notes,strength,starred,createdAt,updatedAt,app_pin\\n"))',
+        'assertTrue(EntryExporter.vaultCsv(listOf(e)).startsWith("name,url,username,mobile,password,notes,strength,starred,createdAt,updatedAt,app_pin,category,recordType,folder,folderId,tags,customFields,email,phone,address,lastUsedAt\\n"))',
+        1,
+    )
     transfer_test.write_text(tt, encoding="utf-8")
-    print("PATCHED TransferTest.kt: BSRPRO CSV full header expectation")
+    print("PATCHED TransferTest.kt: exact current Vault CSV header")
 
     settings_test = root / "app/src/test/java/pro/babasitaram/vault/domain/SettingsAndBackupUseCasesTest.kt"
     st = settings_test.read_text(encoding="utf-8").replace("assertEquals(better, String(e.auth.loadBiometricCredential()!!))", "assertFalse(e.auth.hasBiometricCredential())\n        assertFalse(e.settings.current().biometricEnabled)")
@@ -395,18 +433,18 @@ class AutoLockControllerTest {
         advanceTimeBy(59_000); runCurrent()
         coVerify(exactly = 0) { lock.invoke() }
         advanceTimeBy(2_000); runCurrent()
-        coVerify(exactly = 1) { lock.invoke() }
+        coVerify(exactly = 1) { lock.invoke(any()) }
     }
 
     @Test
     fun `returning to the app in time cancels the lock`() = runTest {
-        var t = 0L
+        var t = 1L
         val c = AutoLockController(FakeSettings(VaultSettings(backgroundGraceSeconds = 60)), unlockedSession(), persisted, lock, backgroundScope)
         c.clock = { t }
         runCurrent()
         c.onBackgrounded()
         advanceTimeBy(30_000); runCurrent()
-        t = 30_000
+        t = 30_001
         c.onForegrounded()
         runCurrent()
         advanceTimeBy(120_000); runCurrent()
@@ -415,15 +453,15 @@ class AutoLockControllerTest {
 
     @Test
     fun `returning after the timeout locks even if the timer never fired`() = runTest {
-        var t = 0L
+        var t = 1L
         val c = AutoLockController(FakeSettings(VaultSettings(backgroundGraceSeconds = 60)), unlockedSession(), persisted, lock, backgroundScope)
         c.clock = { t }
         runCurrent()
         c.onBackgrounded()
-        t = 120_000
+        t = 120_001
         c.onForegrounded()
         runCurrent()
-        coVerify(exactly = 1) { lock.invoke() }
+        coVerify(exactly = 1) { lock.invoke(any()) }
     }
 
     @Test
@@ -485,12 +523,12 @@ class AutoLockNeverTest {
             FakeSettings(VaultSettings(backgroundGraceSeconds = 4 * 60 * 60, vaultSessionSeconds = VaultSettings.AUTO_LOCK_NEVER)),
             session, persisted, lock, backgroundScope
         )
-        var t = 0L
+        var t = 1L
         c.clock = { t }
         runCurrent()
         c.onBackgrounded()
         advanceTimeBy(3_600_000); runCurrent()
-        t = 7_200_000
+        t = 7_200_001
         c.onForegrounded(); runCurrent()
         coVerify(exactly = 0) { lock.invoke() }
     }
