@@ -131,6 +131,79 @@ def main() -> None:
         ["import androidx.compose.ui.semantics.heading", "heading()"],
     )
 
+    session_key_store = root / "app/src/main/java/pro/babasitaram/vault/core/crypto/SessionKeyStore.kt"
+    sks_text = session_key_store.read_text(encoding="utf-8")
+    sks_text = sks_text.replace("import android.os.SystemClock\n", "")
+    sks_text = sks_text.replace(
+        "nowElapsedMs: Long = SystemClock.elapsedRealtime()",
+        "nowElapsedMs: Long = monotonicNowMs()",
+    )
+    sks_text = sks_text.replace(
+        "fun sessionRemainingMs(nowElapsedMs: Long = SystemClock.elapsedRealtime())",
+        "fun sessionRemainingMs(nowElapsedMs: Long = monotonicNowMs())",
+    )
+    sks_text = sks_text.replace(
+        "fun hasValidSession(nowElapsedMs: Long = SystemClock.elapsedRealtime())",
+        "fun hasValidSession(nowElapsedMs: Long = monotonicNowMs())",
+    )
+    sks_text = sks_text.replace(
+        "isExpiredLocked(SystemClock.elapsedRealtime())",
+        "isExpiredLocked(monotonicNowMs())",
+    )
+    marker = "    private fun isExpiredLocked(nowElapsedMs: Long): Boolean =\n"
+    if "private fun monotonicNowMs()" not in sks_text:
+        if marker not in sks_text:
+            raise SystemExit(f"PATCH FAILED {session_key_store}: helper marker missing")
+        sks_text = sks_text.replace(
+            marker,
+            "    private fun monotonicNowMs(): Long = System.nanoTime() / 1_000_000L\n\n" + marker,
+            1,
+        )
+    if "SystemClock.elapsedRealtime()" in sks_text:
+        raise SystemExit(f"PATCH FAILED {session_key_store}: SystemClock remained")
+    session_key_store.write_text(sks_text, encoding="utf-8")
+    print("PATCHED SessionKeyStore.kt: JVM-safe monotonic clock")
+
+    auto_lock = root / "app/src/main/java/pro/babasitaram/vault/core/security/AutoLockController.kt"
+    al_text = auto_lock.read_text(encoding="utf-8")
+    al_text = al_text.replace("import android.os.SystemClock\n", "")
+    al_text = al_text.replace("internal var clock: () -> Long = { SystemClock.elapsedRealtime() }",
+                              "internal var clock: () -> Long = { System.nanoTime() / 1_000_000L }")
+    if "SystemClock.elapsedRealtime()" in al_text:
+        raise SystemExit(f"PATCH FAILED {auto_lock}: SystemClock remained")
+    auto_lock.write_text(al_text, encoding="utf-8")
+    print("PATCHED AutoLockController.kt: JVM-safe monotonic clock")
+
+    settings_store = root / "app/src/main/java/pro/babasitaram/vault/data/local/preferences/SettingsDataStore.kt"
+    settings_text = settings_store.read_text(encoding="utf-8")
+    old_assignment = "prefs[AUTO_LOCK] = n.backgroundGraceSeconds"
+    if old_assignment in settings_text:
+        settings_text = settings_text.replace(old_assignment, "prefs[AUTO_LOCK] = n.autoLockSeconds", 1)
+        settings_store.write_text(settings_text, encoding="utf-8")
+        print("PATCHED SettingsDataStore.kt: persist autoLockSeconds correctly")
+    elif "prefs[AUTO_LOCK] = n.autoLockSeconds" in settings_text:
+        print("UNCHANGED SettingsDataStore.kt: auto lock assignment already correct")
+    else:
+        raise SystemExit(f"PATCH FAILED {settings_store}: AUTO_LOCK assignment missing")
+
+    backup_manager = root / "app/src/main/java/pro/babasitaram/vault/data/backup/AutoBackupManager.kt"
+    backup_text = backup_manager.read_text(encoding="utf-8")
+    old_managed = """    fun isManagedOldName(name: String, finalName: String): Boolean =
+        isQuarantine(name) || isSafRecovery(name) || isStaging(name) || isCanonicalFamily(name, finalName)
+"""
+    new_managed = """    fun isManagedOldName(name: String, finalName: String): Boolean =
+        !name.equals(finalName, ignoreCase = true) &&
+            (isQuarantine(name) || isSafRecovery(name) || isStaging(name) || isNumberedDuplicate(name, finalName) || isLegacyDated(name))
+"""
+    if old_managed in backup_text:
+        backup_text = backup_text.replace(old_managed, new_managed, 1)
+        backup_manager.write_text(backup_text, encoding="utf-8")
+        print("PATCHED AutoBackupManager.kt: final name excluded from old-name cleanup")
+    elif new_managed in backup_text:
+        print("UNCHANGED AutoBackupManager.kt: old-name predicate already fixed")
+    else:
+        raise SystemExit(f"PATCH FAILED {backup_manager}: managed-name predicate missing")
+
     # Test-source fixes: compare against the known-working Phase15V tests and keep new assertions,
     # but restore proper scope/imports/signatures rather than masking compiler failures.
     autofill_test = root / "app/src/test/java/pro/babasitaram/vault/autofill/AutofillParserTest.kt"
@@ -204,6 +277,29 @@ def main() -> None:
         gradle_text = gradle_text.replace('    testImplementation(kotlin("test"))\n', "")
         gradle_file.write_text(gradle_text, encoding="utf-8")
         print("PATCHED app/build.gradle.kts: removed unnecessary kotlin-test dependency")
+
+    editor_vm = root / "app/src/main/java/pro/babasitaram/vault/presentation/editor/EntryEditorViewModel.kt"
+    vm_text = editor_vm.read_text(encoding="utf-8")
+    old_type = """    type = (base?.type.orEmpty()).ifBlank {
+        if (recordType == "login" || recordType.isBlank()) {
+            if (appPackage.isNotBlank() && url.isBlank()) "app" else "website"
+        } else ""
+    },
+"""
+    new_type = """    type = base?.type.orEmpty().ifBlank {
+        if (base == null && (recordType == "login" || recordType.isBlank())) {
+            if (appPackage.isNotBlank() && url.isBlank()) "app" else "website"
+        } else ""
+    },
+"""
+    if old_type in vm_text:
+        vm_text = vm_text.replace(old_type, new_type, 1)
+        editor_vm.write_text(vm_text, encoding="utf-8")
+        print("PATCHED EntryEditorViewModel.kt: preserve existing blank type on edit")
+    elif new_type in vm_text:
+        print("UNCHANGED EntryEditorViewModel.kt: type preservation already fixed")
+    else:
+        raise SystemExit(f"PATCH FAILED {editor_vm}: type assignment marker missing")
 
     editor = root / "app/src/main/java/pro/babasitaram/vault/presentation/editor/EntryEditorScreen.kt"
     editor_import_text = editor.read_text(encoding="utf-8") if editor.is_file() else ""
