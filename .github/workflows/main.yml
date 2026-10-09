@@ -15,7 +15,7 @@ jobs:
       - name: Extract ZIP
         run: |
           mkdir -p extracted
-          unzip -o BSRPRO-Android-PASS10-SOURCE.zip -d extracted
+          unzip -o android.zip -d extracted
           echo "=== Files at root of extract ==="
           ls -la extracted/
       
